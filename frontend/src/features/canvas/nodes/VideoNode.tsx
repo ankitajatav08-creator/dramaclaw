@@ -26,13 +26,16 @@ import {
   ChevronUp,
   Download,
   Film,
+  Flag,
   Languages,
   Layers,
   Loader2,
   Music,
   Pause,
+  Pencil,
   Play,
   RotateCcw,
+  Share as ShareIcon,
   Sparkles,
   Square,
   Upload as UploadIcon,
@@ -60,6 +63,7 @@ import {
   type VideoGenQuality,
   type VideoNodeData,
 } from "@/features/canvas/domain/canvasNodes";
+import { isNodeStoryClip } from "@/features/canvas/story/storySelectors";
 import {
   VIDEO_GENERATION_ASPECT_RATIOS,
   mediaNeedsCrossOrigin,
@@ -630,6 +634,13 @@ export const VideoNode = memo(
     const { t } = useTranslation();
     const updateNodeInternals = useUpdateNodeInternals();
     const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
+    // 故事片段「播放器形态」:故事组内的视频节点默认收起画布编辑 chrome,
+    // 点「编辑」铅笔进编辑态(storyEditNodeId === id)才恢复成普通画布视频节点。
+    const isStoryClip = useCanvasStore((state) => isNodeStoryClip(state.nodes, id));
+    const storyEditNodeId = useCanvasStore((state) => state.storyEditNodeId);
+    const setStoryEditNode = useCanvasStore((state) => state.setStoryEditNode);
+    const inStoryEditMode = isStoryClip && storyEditNodeId === id;
+    const storyPlayerMode = isStoryClip && !inStoryEditMode;
     const isBoxSelecting = useIsBoxSelecting();
     const updateNodeData = useCanvasStore((state) => state.updateNodeData);
     const addDerivedUploadNode = useCanvasStore(
@@ -669,7 +680,11 @@ export const VideoNode = memo(
       records: historyRecords,
       isLoading: historyLoading,
       refresh: refreshHistory,
-    } = useNodeGenerationHistory(id, { enabled: Boolean(selected) });
+    } = useNodeGenerationHistory(id, {
+      // 故事片段播放器形态:不拉取每节点生成历史(也不渲染下方历史框),避免选中时
+      // 历史框「loading→空→消失」造成节点底部闪烁,且历史属画布创作 chrome,播放器形态应收起。
+      enabled: Boolean(selected) && !storyPlayerMode,
+    });
 
     // 生成进行中时，点击历史记录走「非破坏性预览」：不覆写 videoUrl、不打断在途
     // 任务，仅把这条历史视频临时显示在主体上（见 isGenerating 渲染分支）。新视频
@@ -677,6 +692,11 @@ export const VideoNode = memo(
     const [historyPreviewUrl, setHistoryPreviewUrl] = useState<string | null>(
       null,
     );
+
+    // 导入互动影游占位片段的旁白(narration)就地编辑态。双击进入,
+    // 失焦 / ⌘+回车保存,Esc 取消。
+    const [isEditingNarration, setIsEditingNarration] = useState(false);
+    const [narrationDraft, setNarrationDraft] = useState("");
 
     const prompt = typeof data.prompt === "string" ? data.prompt : "";
     // Local draft + composition guard so IME (中文输入法) candidates stop being
@@ -2269,6 +2289,8 @@ export const VideoNode = memo(
       !isClipMode &&
       !subtitleEraseMode &&
       !data.referenceOnly &&
+      // 故事片段播放器形态:隐藏生成面板,点「编辑」进编辑态才显示。
+      !storyPlayerMode &&
       // 视频高清节点用自己的 VideoUpscaleEditorOverlay 配置面板，不走常规生成面板。
       !data.isUpscaleNode;
 
@@ -2420,6 +2442,14 @@ export const VideoNode = memo(
                 updateNodeData(id, { displayName: nextTitle })
               }
             />
+            {data.storyRole === "start" && (
+              <div
+                className="pointer-events-none absolute -top-7 left-1 z-20 flex items-center gap-1 rounded-md border border-accent/40 bg-accent/20 px-2 py-0.5 text-[11px] font-medium text-accent backdrop-blur-sm"
+                title={t("canvas.story.setStart")}
+              >
+                <Flag className="h-3 w-3" />
+              </div>
+            )}
             {videoSource &&
             hasMetadata &&
             !videoLoadError &&
@@ -2600,6 +2630,62 @@ export const VideoNode = memo(
                 {t("node.videoUpscale.placeholder")}
               </span>
             </div>
+          ) : data.narration || data.videoHint ? (
+            // 导入互动影游的占位片段：无视频时展示旁白 + 期望文件名 + 待补提示。
+            // 旁白双击就地编辑（与节点标题一致），写回 narration。
+            <div className="flex h-full w-full flex-col justify-center gap-2 px-6 py-4">
+              {isEditingNarration ? (
+                <textarea
+                  autoFocus
+                  value={narrationDraft}
+                  className="nodrag nowheel max-h-[120px] w-full resize-none rounded-md border border-white/15 bg-black/30 px-2 py-1.5 text-[13px] leading-6 text-text-dark outline-none focus:border-accent/60"
+                  rows={3}
+                  onChange={(event) => setNarrationDraft(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onBlur={() => {
+                    updateNodeData(id, { narration: narrationDraft.trim() });
+                    setIsEditingNarration(false);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setIsEditingNarration(false);
+                    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                      event.preventDefault();
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+              ) : (
+                <p
+                  title={t("canvas.story.editNarrationHint")}
+                  className="nodrag max-h-[96px] cursor-text overflow-y-auto whitespace-pre-wrap break-words text-[13px] leading-6 text-text-dark/85 [overflow-wrap:anywhere]"
+                  onDoubleClick={(event) => {
+                    event.stopPropagation();
+                    setNarrationDraft(
+                      typeof data.narration === "string" ? data.narration : "",
+                    );
+                    setIsEditingNarration(true);
+                  }}
+                >
+                  {data.narration || t("canvas.story.editNarrationEmpty")}
+                </p>
+              )}
+              <div className="flex items-center gap-1.5 text-[11px] text-text-muted/80">
+                <Film className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                <span className="truncate">
+                  {data.videoHint
+                    ? t("canvas.story.importClipHint", { file: data.videoHint })
+                    : t("canvas.story.importClipPending")}
+                </span>
+                {data.importNeedsReview && (
+                  <span className="text-amber-400" title={data.importReviewNote}>
+                    ⚠
+                  </span>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="flex h-full w-full items-center px-8">
               {/* 上游含视频时只能走全能参考，首尾帧/首帧这两个 CTA 会引导到被禁用的
@@ -2662,6 +2748,69 @@ export const VideoNode = memo(
                 onCapture={handleCaptureFrame}
               />
             )}
+
+          {/* 故事片段播放器形态：左上角 hover 操作簇 —— 编辑(进/退编辑态) + 设为起点。
+              换视频沿用右上角既有圆钮(videoSource 时显示)；空占位则靠「编辑」进编辑态生成。 */}
+          {isStoryClip && !isGenerating && !isUploading && !subtitleEraseMode && (
+            <div className="absolute left-2 top-2 z-10 hidden items-center gap-1 group-hover:flex">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (inStoryEditMode) {
+                    setStoryEditNode(null);
+                  } else {
+                    setSelectedNode(id);
+                    setStoryEditNode(id);
+                  }
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                title={t(inStoryEditMode ? "canvas.story.editClipDone" : "canvas.story.editClip")}
+                className={`nodrag flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 shadow-lg backdrop-blur-sm transition-colors ${
+                  inStoryEditMode
+                    ? "bg-accent/80 text-white hover:bg-accent"
+                    : "bg-black/55 text-white/90 hover:bg-black/80 hover:text-white"
+                }`}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              {storyPlayerMode && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    useCanvasStore.getState().setStoryStartNode(id);
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  title={t("canvas.story.setStart")}
+                  className={`nodrag flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/55 shadow-lg backdrop-blur-sm transition-colors hover:bg-black/80 ${
+                    data.storyRole === "start" ? "text-accent" : "text-white/90 hover:text-white"
+                  }`}
+                >
+                  <Flag className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* 替换视频：hover 节点出现的右上角圆钮，点击走文件选择器替换当前节点视频。
+              与画册徽标共处右上角，hasAlbum 时左移让位给数量徽标。 */}
+          {videoSource && !isGenerating && !isUploading && !subtitleEraseMode && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleUploadClick();
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              title={t("node.videoNode.replace")}
+              className={`nodrag absolute top-2 z-10 hidden h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/55 text-white/90 shadow-lg backdrop-blur-sm transition-colors hover:bg-black/80 hover:text-white group-hover:inline-flex ${
+                hasAlbum ? "right-12" : "right-2"
+              }`}
+            >
+              <ShareIcon className="h-3.5 w-3.5" />
+            </button>
+          )}
 
           {/* 画册数量徽标：hover 节点出现，hover 徽标箭头下探，点击展开画册。 */}
           {hasAlbum && !isGenerating && videoSource && (
@@ -2877,6 +3026,17 @@ export const VideoNode = memo(
                   <CharacterLibraryChip
                     onOpen={() => setIsCharacterLibraryOpen(true)}
                   />
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      useCanvasStore.getState().setStoryStartNode(id);
+                    }}
+                    title={t("canvas.story.setStart")}
+                    className={`nodrag flex items-center justify-center rounded p-1 transition-colors hover:bg-white/10 ${data.storyRole === "start" ? "text-accent" : "text-text-muted"}`}
+                  >
+                    <Flag className="h-4 w-4" />
+                  </button>
                 </div>
                 <div className="ml-3 flex shrink-0 items-center gap-3">
                   <GenModeSelect
@@ -3065,6 +3225,7 @@ export const VideoNode = memo(
           !isClipMode &&
           !subtitleEraseMode &&
           !data.referenceOnly &&
+          !storyPlayerMode &&
           hasCompletedHistoryRecords(historyRecords) && (
             <div
               className={`nodrag absolute z-[300] rounded-[var(--node-radius)] ${CANVAS_NODE_OPS_PANEL_CLASS} ${NODE_OPS_PANEL_ENTER_CLASS} px-3 py-2`}

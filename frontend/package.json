@@ -44,6 +44,7 @@
     "i18next": "^26.0.4",
     "i18next-browser-languagedetector": "^8.2.1",
     "i18next-http-backend": "^3.0.4",
+    "inkjs": "^2.4.0",
     "konva": "^10.3.0",
     "ky": "^2.0.0",
     "lucide-react": "^1.8.0",
