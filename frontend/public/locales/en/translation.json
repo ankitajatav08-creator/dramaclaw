@@ -3556,6 +3556,7 @@
       "deleteConfirmAction": "Delete",
       "deleteFailed": "Delete failed. Please try again.",
       "promptTitle": "Prompt",
+      "viewFullPrompt": "View full prompt",
       "batchDownload": "Download",
       "batchUse": "Use",
       "selectAll": "Select all",
